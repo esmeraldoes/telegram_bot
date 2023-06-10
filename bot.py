@@ -12,6 +12,7 @@ import requests
 import asyncio
 import os
 from dotenv import load_dotenv
+from databse import save_api_key, get_api_key, save_main_id, get_main_id, get_cancel_flag, save_cancel_flag
 
 
 STATE_CHOOSING_OPTION, API_KEY_CHOOSE, STATE_CHOOSING_ITEM, STATE_CONFIRMATION, STATE_END = range(5)
@@ -46,13 +47,14 @@ async def start(update: Update, context: CallbackContext) -> None:
     return STATE_CHOOSING_OPTION
 async def generate_access_key(update: Update, context: CallbackContext) -> None:
     callback_query = update.callback_query
-
+    chat_id_effective = update.effective_chat.id
     if callback_query is None:
         api_key = update.message.text.strip()
+
+        save_api_key(chat_id_effective, api_key)
         url = f"https://smstore.su/stubs/handler_api.php?api_key={api_key}&action=getBalance"
         response = requests.get(url)
         if response.status_code == 200 and "ACCESS_BALANCE" in response.text:
-            context.user_data['api_key'] = api_key
             message = "Welcome to the main menu. Please select a service:"
             reply_markup = InlineKeyboardMarkup(main_menu_keyboard)
             await context.bot.send_message(chat_id=update.effective_chat.id, text=message, reply_markup=reply_markup)
@@ -74,9 +76,8 @@ async def generate_access_key(update: Update, context: CallbackContext) -> None:
 async def button_callback(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
     if query.data == 'get_number':
-        chat_id = update.callback_query.message.chat_id
-        api_key = context.user_data.get('api_key')
-
+        chat_id = update.effective_chat.id
+        api_key = get_api_key(chat_id)
         row = []
         response = requests.get(f'https://smstore.su/stubs/handler_api.php?api_key={api_key}&action=getServices')
         services = response.json()
@@ -110,8 +111,9 @@ async def button_callback(update: Update, context: CallbackContext) -> None:
         return STATE_CHOOSING_ITEM   
 
     elif query.data == "check_balance":
-        chat_id = update.callback_query.message.chat_id
-        api_key = context.user_data.get('api_key')
+        chat_id = update.effective_chat.id
+        api_key = get_api_key(chat_id)
+       
         response = requests.get(f"https://smstore.su/stubs/handler_api.php?api_key={api_key}&action=getBalance")
         balance_str = response.text.split(":")[1]
         message = f'₹{float(balance_str):.2f}'
@@ -136,7 +138,9 @@ async def button_callback(update: Update, context: CallbackContext) -> None:
 
 async def service_callback(update: Update, context: CallbackContext) -> None:   
     query = update.callback_query  
-    api_key = context.user_data.get('api_key')
+   
+    chat_id = update.effective_chat.id
+    api_key = get_api_key(chat_id)
 
     service = query.data
     response = requests.get(f'https://smstore.su/stubs/handler_api.php?api_key={api_key}&action=getNumber&service={service}&country=22')
@@ -150,9 +154,10 @@ async def service_callback(update: Update, context: CallbackContext) -> None:
         await context.bot.send_message(chat_id=query.message.chat_id, text="https://telegra.ph/HOW-TO-ADD-BALANCE-05-31")
         return STATE_CHOOSING_ITEM
     else:
+        
         access_number = responded.split(":")[2]
         main_id = responded.split(':')[1]
-        context.user_data['id'] = main_id
+        save_main_id(chat_id, main_id)
        
         sms_keyboard = [[InlineKeyboardButton("Cancel Activation", callback_data='8'),
                 InlineKeyboardButton("Request New SMS", callback_data='3')],
@@ -162,16 +167,19 @@ async def service_callback(update: Update, context: CallbackContext) -> None:
         reply_markup = InlineKeyboardMarkup(sms_keyboard)
         await context.bot.send_message(chat_id=query.message.chat_id, text=f"{message}\n\nNumber: \U0001F4F1 {access_number}\nID:{main_id}", reply_markup=reply_markup)
         cancel_flag = asyncio.Event()
-        context.user_data['cancel_flag'] = cancel_flag
+        save_cancel_flag(chat_id, cancel_flag)
+
         asyncio.create_task(check_otp_code_availability(context, query.message.chat_id, api_key, main_id, cancel_flag))
     
     return STATE_CONFIRMATION  
 
 async def cancel_activation(update: Update, context: CallbackContext):
     query = update.callback_query
-    api_key = context.user_data.get('api_key')
-    id = context.user_data.get('id')
-    cancel_flag = context.user_data.get('cancel_flag')
+    chat_id = update.effective_chat.id
+    api_key = get_api_key(chat_id)
+    id = get_main_id(chat_id)
+    cancel_flag = get_cancel_flag(chat_id)
+    
     button_list = [[KeyboardButton("⬅️ Back"), KeyboardButton("\U0001F3E1 Home")]]
     reply_markup = ReplyKeyboardMarkup(button_list, resize_keyboard=True,one_time_keyboard=True)
     
@@ -194,12 +202,15 @@ async def cancel_activation(update: Update, context: CallbackContext):
         else:
             await context.bot.send_message(chat_id=query.message.chat_id, text="Sending SMS", reply_markup=reply_markup)
             cancel_flag = asyncio.Event()
-            context.user_data['cancel_flag'] = cancel_flag
+            save_cancel_flag(chat_id, cancel_flag)
+           
             asyncio.create_task(check_otp_code_availability(context, query.message.chat_id, api_key, id, cancel_flag))
     return STATE_CONFIRMATION
 
 async def back(update: Update, context: CallbackContext) -> None:
-        api_key = context.user_data.get('api_key')
+        chat_id = update.effective_chat.id
+        api_key = get_api_key(chat_id)
+        
         row = []
         response = requests.get(f'https://smstore.su/stubs/handler_api.php?api_key={api_key}&action=getServices')
         services = response.json()
